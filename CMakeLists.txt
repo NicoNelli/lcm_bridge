@@ -135,8 +135,9 @@ endif()
 
 
 include_directories(
-  ${catkin_INCLUDE_DIRS}
-  ${Eigen_INCLUDE_DIR}
+        ${catkin_INCLUDE_DIRS}
+        ${Eigen_INCLUDE_DIR}
+
 )
 
 ## Declare a C++ library
@@ -157,10 +158,11 @@ include_directories(
 # add_dependencies(lcm_brigde_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 ## Specify libraries to link a library or executable target against
- target_link_libraries(lcm_brigde_node
-   ${catkin_LIBRARIES}
-   ${PROJECT_LINK_LIBS}
- )
+target_link_libraries(lcm_brigde_node
+        ${catkin_LIBRARIES}
+        ${PROJECT_LINK_LIBS}
+        ${LCM_LIBRARIES}
+        )
 
 #############
 ## Install ##
