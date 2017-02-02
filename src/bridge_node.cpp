@@ -2,7 +2,10 @@
 #include "ros/ros.h"
 #include "geometry_msgs/PoseStamped.h"
 #include "geometry_msgs/TwistStamped.h"
+#include "mavros_msgs/State.h"
+#include "mavros_msgs/ExtendedState.h"
 #include "lcm_messages/geometry/pose.hpp"
+#include "lcm_messages/exec/state.hpp"
 #include "common/MavState.h"
 #include "common/CallbackHandler.hpp"
 #include <poll.h>
@@ -10,7 +13,12 @@
 
 lcm::LCM handler, handler2;
 geometry::pose lcm_pose;
+exec::state robot_state;
+mavros_msgs::State disarmed;
+mavros_msgs::ExtendedState landed;
 CallbackHandler call;
+bool firstState = true;
+bool firstEState = true;
 
 void odometryCallback(nav_msgs::Odometry pose){
 
@@ -31,6 +39,31 @@ void odometryCallback(nav_msgs::Odometry pose){
 
 }
 
+void stateCallback(mavros_msgs::State s){
+
+    if (firstState) {
+        disarmed.armed = s.armed;
+        firstState = false;
+    }
+
+    //Store arming state
+    if(disarmed.armed == s.armed) robot_state.armed = 0;
+    else robot_state.armed = 1;
+
+}
+void EStateCallback(mavros_msgs::ExtendedState es){
+
+    if (firstEState) {
+        landed.landed_state = es.landed_state;
+        firstEState = false;
+    }
+
+    //Store landing state
+    if(landed.landed_state == es.landed_state) robot_state.landed = 1;
+    else robot_state.landed = 0;
+
+}
+
 
 int main(int argc, char **argv)
 {
@@ -39,6 +72,8 @@ int main(int argc, char **argv)
     ros::init(argc, argv, "ros2lcm_bridge");
     ros::NodeHandle n;
     ros::Subscriber odometry_sub = n.subscribe("/mavros/local_position/odom",1,&odometryCallback);
+    ros::Subscriber state_sub = n.subscribe("/mavros/state",1,&stateCallback);
+    ros::Subscriber state_extended_sub = n.subscribe("/mavros/extended_state",1,&EStateCallback);
     ros::Publisher  pub  = n.advertise<geometry_msgs::PoseStamped>("/mavros/setpoint_position/local",1);
     ros::Publisher  pub2 = n.advertise<geometry_msgs::TwistStamped>("/mavros/setpoint_velocity/cmd_vel",1);
 
@@ -51,8 +86,11 @@ int main(int argc, char **argv)
     fds[0].fd = handler2.getFileno(); // Actual task
     fds[0].events = POLLIN;
 
+    robot_state.landed = 1;
+    robot_state.armed  = 0;
     //main loop
     ros::Rate loop_rate(30);
+    int stateRate = 0;
 
     while (ros::ok()){
 
@@ -89,9 +127,12 @@ int main(int argc, char **argv)
                 pub2.publish(commandPose);
             }
 
+
+
             ROS_INFO_ONCE("publish ros command");
 
         }
+
         ROS_INFO_ONCE("Spinning");
         ros::spinOnce();
         loop_rate.sleep();
