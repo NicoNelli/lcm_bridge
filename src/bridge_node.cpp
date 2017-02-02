@@ -58,7 +58,6 @@ void EStateCallback(mavros_msgs::ExtendedState es){
         firstEState = false;
     }
 
-    //Store landing state
     if(landed.landed_state == es.landed_state) robot_state.landed = 1;
     else robot_state.landed = 0;
 
@@ -131,6 +130,11 @@ int main(int argc, char **argv)
 
             ROS_INFO_ONCE("publish ros command");
 
+        }
+
+        if (stateRate++ > 10){
+            handler2.publish("state",&robot_state);
+            stateRate = 0;
         }
 
         ROS_INFO_ONCE("Spinning");
