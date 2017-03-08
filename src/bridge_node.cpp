@@ -110,7 +110,6 @@ int main(int argc, char **argv)
                 commandPose.pose.orientation.z = call._position_sp.getOrientation().z();
                 commandPose.pose.orientation.w = call._position_sp.getOrientation().w();
 
-
                 std::cout << "command: " << commandPose.pose.position.x << " " << commandPose.pose.position.y << " " <<commandPose.pose.position.z << std::endl;
                 pub.publish(commandPose);
             }
@@ -126,8 +125,6 @@ int main(int argc, char **argv)
                 pub2.publish(commandPose);
             }
 
-
-
             ROS_INFO_ONCE("publish ros command");
 
         }
@@ -142,7 +139,6 @@ int main(int argc, char **argv)
         loop_rate.sleep();
 
     }
-
 
     return 0;
 
