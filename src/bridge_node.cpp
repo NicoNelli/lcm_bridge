@@ -24,7 +24,7 @@ void odometryCallback(nav_msgs::Odometry pose){
 
     lcm_pose.position[0] =  pose.pose.pose.position.x;
     lcm_pose.position[1] =  pose.pose.pose.position.y;
-    lcm_pose.position[2] = -pose.pose.pose.position.z;
+    lcm_pose.position[2] =  pose.pose.pose.position.z;
 
     lcm_pose.velocity[0] = pose.twist.twist.linear.x;
     lcm_pose.velocity[1] = pose.twist.twist.linear.y;
@@ -103,7 +103,7 @@ int main(int argc, char **argv)
 
                 commandPose.pose.position.x = call._position_sp.getX();
                 commandPose.pose.position.y = call._position_sp.getY();
-                commandPose.pose.position.z = -call._position_sp.getZ();
+                commandPose.pose.position.z = call._position_sp.getZ();
 
                 commandPose.pose.orientation.x = call._position_sp.getOrientation().x();
                 commandPose.pose.orientation.y = call._position_sp.getOrientation().y();
