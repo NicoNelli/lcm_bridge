@@ -11,14 +11,20 @@
 #include <poll.h>
 #include "nav_msgs/Odometry.h"
 
-lcm::LCM handler, handler2;
+lcm::LCM handler, handler2, handler3;
 geometry::pose lcm_pose;
 exec::state robot_state;
+nav_msgs::Odometry platPos;
 mavros_msgs::State disarmed;
 mavros_msgs::ExtendedState landed;
 CallbackHandler call;
+nav_msgs::Odometry pose_t;
+
+ros::Publisher  pub1;
+
 bool firstState = true;
 bool firstEState = true;
+bool firstPlat = false;
 
 void odometryCallback(nav_msgs::Odometry pose){
 
@@ -34,8 +40,14 @@ void odometryCallback(nav_msgs::Odometry pose){
     lcm_pose.orientation[1] = pose.pose.pose.orientation.x;
     lcm_pose.orientation[2] = pose.pose.pose.orientation.y;
     lcm_pose.orientation[3] = pose.pose.pose.orientation.z;
-
+    pose_t = pose;
     handler.publish("vision_position_estimate",&lcm_pose);
+    if(firstPlat){
+       // platPos.header = pose.header;
+       // pub1.publish(platPos);
+    }
+
+
 
 }
 
@@ -74,16 +86,22 @@ int main(int argc, char **argv)
     ros::Subscriber state_sub = n.subscribe("/mavros/state",1,&stateCallback);
     ros::Subscriber state_extended_sub = n.subscribe("/mavros/extended_state",1,&EStateCallback);
     ros::Publisher  pub  = n.advertise<geometry_msgs::PoseStamped>("/mavros/setpoint_position/local",1);
+    pub1  = n.advertise<nav_msgs::Odometry>("/platform_position",1);
     ros::Publisher  pub2 = n.advertise<geometry_msgs::TwistStamped>("/mavros/setpoint_velocity/cmd_vel",1);
 
     //LCM stuff
 
     lcm::Subscription *sub2 = handler2.subscribe("local_position_sp", &CallbackHandler::positionSetpointCallback, &call);
+    lcm::Subscription *sub3 = handler3.subscribe("platRob"    , &CallbackHandler::visionEstimateCallback, &call);
     sub2->setQueueCapacity(1);
+    sub3->setQueueCapacity(1);
 
-    struct pollfd fds[1];
+    struct pollfd fds[2];
     fds[0].fd = handler2.getFileno(); // Actual task
     fds[0].events = POLLIN;
+
+    fds[1].fd = handler3.getFileno(); // Actual task
+    fds[1].events = POLLIN;
 
     robot_state.landed = 1;
     robot_state.armed  = 0;
@@ -93,7 +111,26 @@ int main(int argc, char **argv)
 
     while (ros::ok()){
 
-        int ret = poll(fds,1,0);
+        int ret = poll(fds,2,0);
+
+
+
+        if(fds[1].revents & POLLIN){
+
+            handler3.handle();
+            platPos.pose.pose.position.x = call._vision_pos.getX();
+            platPos.pose.pose.position.y = call._vision_pos.getY();
+            platPos.pose.pose.position.z = call._vision_pos.getZ();
+
+            platPos.twist.twist.linear.x = call._vision_pos.getVx();
+            platPos.twist.twist.linear.y = call._vision_pos.getVy();
+            platPos.twist.twist.linear.z = call._vision_pos.getVz();
+
+            platPos.header.stamp = ros::Time::now();
+            pub1.publish(platPos);
+
+            firstPlat = true;
+        }
 
         if(fds[0].revents & POLLIN){
 
@@ -129,10 +166,12 @@ int main(int argc, char **argv)
 
         }
 
+
         if (stateRate++ > 10){
             handler2.publish("state",&robot_state);
             stateRate = 0;
         }
+
 
         ROS_INFO_ONCE("Spinning");
         ros::spinOnce();
