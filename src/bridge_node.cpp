@@ -8,8 +8,8 @@
 #include "lcm_messages/exec/state.hpp"
 #include "common/MavState.h"
 #include "common/CallbackHandler.hpp"
-#include <poll.h>
 #include "nav_msgs/Odometry.h"
+#include <poll.h>
 
 lcm::LCM handler, handler2, handler3;
 geometry::pose lcm_pose;
@@ -18,13 +18,9 @@ nav_msgs::Odometry platPos;
 mavros_msgs::State disarmed;
 mavros_msgs::ExtendedState landed;
 CallbackHandler call;
-nav_msgs::Odometry pose_t;
-
-ros::Publisher  pub1;
 
 bool firstState = true;
 bool firstEState = true;
-bool firstPlat = false;
 
 void odometryCallback(nav_msgs::Odometry pose){
 
@@ -40,14 +36,8 @@ void odometryCallback(nav_msgs::Odometry pose){
     lcm_pose.orientation[1] = pose.pose.pose.orientation.x;
     lcm_pose.orientation[2] = pose.pose.pose.orientation.y;
     lcm_pose.orientation[3] = pose.pose.pose.orientation.z;
-    pose_t = pose;
+
     handler.publish("vision_position_estimate",&lcm_pose);
-    if(firstPlat){
-       // platPos.header = pose.header;
-       // pub1.publish(platPos);
-    }
-
-
 
 }
 
@@ -85,36 +75,38 @@ int main(int argc, char **argv)
     ros::Subscriber odometry_sub = n.subscribe("/mavros/local_position/odom",1,&odometryCallback);
     ros::Subscriber state_sub = n.subscribe("/mavros/state",1,&stateCallback);
     ros::Subscriber state_extended_sub = n.subscribe("/mavros/extended_state",1,&EStateCallback);
+
     ros::Publisher  pub  = n.advertise<geometry_msgs::PoseStamped>("/mavros/setpoint_position/local",1);
-    pub1  = n.advertise<nav_msgs::Odometry>("/platform_position",1);
+    ros::Publisher  pub1 = n.advertise<nav_msgs::Odometry>("/platform_position",1);
     ros::Publisher  pub2 = n.advertise<geometry_msgs::TwistStamped>("/mavros/setpoint_velocity/cmd_vel",1);
 
     //LCM stuff
-
     lcm::Subscription *sub2 = handler2.subscribe("local_position_sp", &CallbackHandler::positionSetpointCallback, &call);
     lcm::Subscription *sub3 = handler3.subscribe("platRob"    , &CallbackHandler::visionEstimateCallback, &call);
     sub2->setQueueCapacity(1);
     sub3->setQueueCapacity(1);
 
     struct pollfd fds[2];
-    fds[0].fd = handler2.getFileno(); // Actual task
+    fds[0].fd = handler2.getFileno(); // Robot position
     fds[0].events = POLLIN;
 
-    fds[1].fd = handler3.getFileno(); // Actual task
+    fds[1].fd = handler3.getFileno(); // Platform position
     fds[1].events = POLLIN;
 
     robot_state.landed = 1;
     robot_state.armed  = 0;
+
     //main loop
     ros::Rate loop_rate(30);
     int stateRate = 0;
+    bool * platformDataRec;
+    bool * robotDataRec;
 
     while (ros::ok()){
 
         int ret = poll(fds,2,0);
 
-
-
+        //Platform position POLLIN
         if(fds[1].revents & POLLIN){
 
             handler3.handle();
@@ -129,9 +121,9 @@ int main(int argc, char **argv)
             platPos.header.stamp = ros::Time::now();
             pub1.publish(platPos);
 
-            firstPlat = true;
         }
 
+        //Position Command POLLIN
         if(fds[0].revents & POLLIN){
 
             if(call._position_sp.getType() == MavState::type::POSITION) {
@@ -166,7 +158,7 @@ int main(int argc, char **argv)
 
         }
 
-
+        //Publish state sometimes
         if (stateRate++ > 10){
             handler2.publish("state",&robot_state);
             stateRate = 0;
