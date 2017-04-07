@@ -99,15 +99,18 @@ int main(int argc, char **argv)
     //main loop
     ros::Rate loop_rate(30);
     int stateRate = 0;
-    bool * platformDataRec;
-    bool * robotDataRec;
+    int*  platformDataRec = new int(0);
+    int*  robotDataRec    = new int(0);
 
     while (ros::ok()){
 
+        //Poll file descriptors
         int ret = poll(fds,2,0);
+        *platformDataRec = fds[1].revents & POLLIN;
+        *robotDataRec    = fds[0].revents & POLLIN;
 
         //Platform position POLLIN
-        if(fds[1].revents & POLLIN){
+        if(*platformDataRec){
 
             handler3.handle();
             platPos.pose.pose.position.x = call._vision_pos.getX();
@@ -124,7 +127,7 @@ int main(int argc, char **argv)
         }
 
         //Position Command POLLIN
-        if(fds[0].revents & POLLIN){
+        if(*robotDataRec){
 
             if(call._position_sp.getType() == MavState::type::POSITION) {
                 geometry_msgs::PoseStamped commandPose;
@@ -170,6 +173,9 @@ int main(int argc, char **argv)
         loop_rate.sleep();
 
     }
+
+    delete platformDataRec;
+    delete robotDataRec;
 
     return 0;
 
