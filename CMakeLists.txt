@@ -137,7 +137,7 @@ endif()
 include_directories(
         ${catkin_INCLUDE_DIRS}
         ${Eigen_INCLUDE_DIR}
-
+        ${M2M_INCLUDE}
 )
 
 ## Declare a C++ library
@@ -152,6 +152,7 @@ include_directories(
 
 ## Declare a C++ executable
  add_executable(lcm_brigde_node src/bridge_node.cpp ${M2M_INCLUDE}/../src/MavState.cpp)
+ add_executable(lcm_platform_node src/platform_node.cpp)
 
 ## Add cmake target dependencies of the executable
 ## same as for the library above
@@ -160,7 +161,11 @@ include_directories(
 ## Specify libraries to link a library or executable target against
 target_link_libraries(lcm_brigde_node
         ${catkin_LIBRARIES}
-        ${PROJECT_LINK_LIBS}
+        ${LCM_LIBRARIES}
+        )
+
+target_link_libraries(lcm_platform_node
+        ${catkin_LIBRARIES}
         ${LCM_LIBRARIES}
         )
 

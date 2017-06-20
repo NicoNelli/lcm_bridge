@@ -11,10 +11,9 @@
 #include "nav_msgs/Odometry.h"
 #include <poll.h>
 
-lcm::LCM handler, handler2, handler3;
+lcm::LCM handler, handler2;
 geometry::pose lcm_pose;
 exec::state robot_state;
-nav_msgs::Odometry platPos;
 mavros_msgs::State disarmed;
 mavros_msgs::ExtendedState landed;
 CallbackHandler call;
@@ -77,21 +76,16 @@ int main(int argc, char **argv)
     ros::Subscriber state_extended_sub = n.subscribe("/mavros/extended_state",1,&EStateCallback);
 
     ros::Publisher  pub  = n.advertise<geometry_msgs::PoseStamped>("/mavros/setpoint_position/local",1);
-    ros::Publisher  pub1 = n.advertise<nav_msgs::Odometry>("/platform_position",1);
     ros::Publisher  pub2 = n.advertise<geometry_msgs::TwistStamped>("/mavros/setpoint_velocity/cmd_vel",1);
 
     //LCM stuff
     lcm::Subscription *sub2 = handler2.subscribe("local_position_sp", &CallbackHandler::positionSetpointCallback, &call);
-    lcm::Subscription *sub3 = handler3.subscribe("platRob"    , &CallbackHandler::visionEstimateCallback, &call);
-    sub2->setQueueCapacity(1);
-    sub3->setQueueCapacity(1);
 
-    struct pollfd fds[2];
+    sub2->setQueueCapacity(1);
+
+    struct pollfd fds[1];
     fds[0].fd = handler2.getFileno(); // Robot position
     fds[0].events = POLLIN;
-
-    fds[1].fd = handler3.getFileno(); // Platform position
-    fds[1].events = POLLIN;
 
     robot_state.landed = 1;
     robot_state.armed  = 0;
@@ -99,32 +93,13 @@ int main(int argc, char **argv)
     //main loop
     ros::Rate loop_rate(30);
     int stateRate = 0;
-    int*  platformDataRec = new int(0);
     int*  robotDataRec    = new int(0);
 
     while (ros::ok()){
 
         //Poll file descriptors
-        int ret = poll(fds,2,0);
-        *platformDataRec = fds[1].revents & POLLIN;
+        int ret = poll(fds,1,0);
         *robotDataRec    = fds[0].revents & POLLIN;
-
-        //Platform position POLLIN
-        if(*platformDataRec){
-
-            handler3.handle();
-            platPos.pose.pose.position.x = call._vision_pos.getX();
-            platPos.pose.pose.position.y = call._vision_pos.getY();
-            platPos.pose.pose.position.z = call._vision_pos.getZ();
-
-            platPos.twist.twist.linear.x = call._vision_pos.getVx();
-            platPos.twist.twist.linear.y = call._vision_pos.getVy();
-            platPos.twist.twist.linear.z = call._vision_pos.getVz();
-
-            platPos.header.stamp = ros::Time::now();
-            pub1.publish(platPos);
-
-        }
 
         //Position Command POLLIN
         if(*robotDataRec){
@@ -174,7 +149,6 @@ int main(int argc, char **argv)
 
     }
 
-    delete platformDataRec;
     delete robotDataRec;
 
     return 0;
