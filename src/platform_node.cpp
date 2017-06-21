@@ -4,11 +4,30 @@
 #include "lcm_messages/geometry/pose.hpp"
 #include "utils/TimeHelpers.hpp"
 
+#include <queue>
+
 lcm::LCM handler;
 geometry::pose temp_plat;
 geometry::pose temp_plat_prev;
 TimeManager tm;
 bool first = true;
+int window = 10;
+
+typedef std::queue<double> queue_t;
+
+queue_t stack_x;
+queue_t stack_y;
+queue_t stack_z;
+
+double integral_x = 0;
+double integral_y = 0;
+double integral_z = 0;
+
+void mean(double& sum,double plus,double minus){
+
+    sum += plus - minus;
+
+}
 
 void calculateVel(){
 
@@ -24,9 +43,37 @@ void calculateVel(){
         double dy = temp_plat.position[1] - temp_plat_prev.position[1];
         double dz = temp_plat.position[2] - temp_plat_prev.position[2];
 
-        temp_plat.velocity[0] = dx/tm._dt;
-        temp_plat.velocity[1] = dy/tm._dt;
-        temp_plat.velocity[2] = dz/tm._dt;
+        double vx = dx/tm._dt;
+        double vy = dy/tm._dt;
+        double vz = dz/tm._dt;
+
+        //Mean for smoothing
+        if (stack_x.size() == window) {
+            mean(integral_x,vx,stack_x.front());
+            stack_x.pop();
+        } else
+            mean(integral_x,vx,0);
+
+        if (stack_y.size() == window) {
+            mean(integral_y, vy, stack_y.front());
+            stack_y.pop();
+        } else
+            mean(integral_y,vy,0);
+
+        if (stack_z.size() == window) {
+            mean(integral_z, vz, stack_z.front());
+            stack_z.pop();
+        } else
+            mean(integral_z,vz,0);
+
+        stack_x.push(vx);
+        stack_y.push(vy);
+        stack_z.push(vz);
+
+        //Something has been pushed, size is not 0
+        temp_plat.velocity[0] = integral_x/stack_x.size();
+        temp_plat.velocity[1] = integral_y/stack_y.size();
+        temp_plat.velocity[2] = integral_z/stack_z.size();
 
     }
 
