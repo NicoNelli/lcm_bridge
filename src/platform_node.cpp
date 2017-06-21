@@ -11,7 +11,7 @@ geometry::pose temp_plat;
 geometry::pose temp_plat_prev;
 TimeManager tm;
 bool first = true;
-int window = 30;
+int window = 10;
 
 typedef std::queue<double> queue_t;
 
