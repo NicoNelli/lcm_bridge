@@ -2,6 +2,7 @@
 #include "ros/ros.h"
 #include "geometry_msgs/PoseStamped.h"
 #include "lcm_messages/geometry/pose.hpp"
+#include "nav_msgs/Odometry.h"
 #include "utils/TimeHelpers.hpp"
 
 #include <queue>
@@ -11,8 +12,8 @@ geometry::pose temp_plat;
 geometry::pose temp_plat_prev;
 TimeManager tm;
 bool first = true;
-int window = 10;
-
+int window = 6;
+ros::Publisher pub;
 typedef std::queue<double> queue_t;
 
 queue_t stack_x;
@@ -102,6 +103,18 @@ void posePCB(geometry_msgs::PoseStamped msg){
     std::cout << temp_plat.velocity[0] << std::endl;
     std::cout << temp_plat.velocity[1] << std::endl;
     std::cout << temp_plat.velocity[2] << std::endl;
+    
+    //ROS Helper for visualization
+    nav_msgs::Odometry temp_pos;
+    temp_pos.pose.pose.position.x = temp_plat.position[0];
+    temp_pos.pose.pose.position.y = temp_plat.position[1];
+    temp_pos.pose.pose.position.z = temp_plat.position[2];
+
+    temp_pos.twist.twist.linear.x = temp_plat.velocity[0];
+    temp_pos.twist.twist.linear.y = temp_plat.velocity[1];
+    temp_pos.twist.twist.linear.z = temp_plat.velocity[2];
+
+    pub.publish(temp_pos); 
 
 }
 
@@ -112,7 +125,7 @@ int main(int argc, char **argv)
     ros::init(argc, argv, "ros2lcm_plat");
     ros::NodeHandle n;
     ros::Subscriber plat_sub = n.subscribe("/PlatformPose",1,&posePCB);
-
+    pub = n.advertise<nav_msgs::Odometry>("/PlatformPose_filtered", 1);
     tm.updateTimer();
     //main loop
 
