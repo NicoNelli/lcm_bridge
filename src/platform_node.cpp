@@ -106,7 +106,7 @@ void posePCB(geometry_msgs::PoseStamped msg){
     
     //ROS Helper for visualization
     nav_msgs::Odometry temp_pos;
-    temp_pos.header = msg.header;
+    temp_pos.header.stamp = ros::Time::now();
     temp_pos.pose.pose.position.x = temp_plat.position[0];
     temp_pos.pose.pose.position.y = temp_plat.position[1];
     temp_pos.pose.pose.position.z = temp_plat.position[2];
