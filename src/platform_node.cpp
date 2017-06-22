@@ -87,9 +87,9 @@ void calculateVel(){
 void posePCB(geometry_msgs::PoseStamped msg){
 
     tm.updateTimer();
-    temp_plat.position[0] = msg.pose.position.x;
-    temp_plat.position[1] = msg.pose.position.y;
-    temp_plat.position[2] = msg.pose.position.z;
+    temp_plat.position[0] = std::round(msg.pose.position.x * 1000) / 1000;
+    temp_plat.position[1] = std::round(msg.pose.position.y * 1000) / 1000;
+    temp_plat.position[2] = std::round(msg.pose.position.z * 1000) / 1000;
 
     calculateVel();
 
