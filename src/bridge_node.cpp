@@ -10,14 +10,19 @@
 #include "common/CallbackHandler.hpp"
 #include "nav_msgs/Odometry.h"
 #include <poll.h>
+#include <Eigen/Core>
+#include <Eigen/geometry>
+#include "apriltags/AprilTagDetections.h"
 
-lcm::LCM handler, handler2, handler3;
+lcm::LCM handler, handler2, handler3, handler4;
 geometry::pose lcm_pose;
 exec::state robot_state;
 nav_msgs::Odometry platPos;
 mavros_msgs::State disarmed;
 mavros_msgs::ExtendedState landed;
 CallbackHandler call;
+
+geometry::pose vision_pose; //lcm message for vision topic.
 
 bool firstState = true;
 bool firstEState = true;
@@ -65,6 +70,80 @@ void EStateCallback(mavros_msgs::ExtendedState es){
 
 }
 
+void ApriltagCallback(apriltags::AprilTagDetections A_det){
+			
+        if( A_det.detections.size() >0 ){ //check if there is at least one detected tag.
+
+                Eigen::MatrixXd AreaID(A_det.detections.size(),2); //in each row, there is the area of the tag and its index in the vector.
+
+                Eigen::Vector3d rel_pose; //relative position choosen.
+
+                for(int i=0; i< A_det.detections.size(); i++){ //for each tag, it computes each side of the square.
+		
+                        double l1 = sqrt(pow(A_det.detections[i].corners2d[1].y - A_det.detections[i].corners2d[0].y, 2)+pow(A_det.detections[i].corners2d[1].x - A_det.detections[i].corners2d[0].x,2));
+		
+                        double l2 = sqrt(pow(A_det.detections[i].corners2d[2].y - A_det.detections[i].corners2d[1].y, 2)+pow(A_det.detections[i].corners2d[2].x - A_det.detections[i].corners2d[1].x,2));
+	
+                        double l3 = sqrt(pow(A_det.detections[i].corners2d[3].y - A_det.detections[i].corners2d[2].y, 2)+pow(A_det.detections[i].corners2d[3].x - A_det.detections[i].corners2d[2].x,2));
+
+                        double l4 = sqrt(pow(A_det.detections[i].corners2d[0].y - A_det.detections[i].corners2d[3].y, 2)+pow(A_det.detections[i].corners2d[0].x - A_det.detections[i].corners2d[3].x,2));
+		
+                        double meanL = (l1 + l2 + l3 + l4)/4; //mean value of the lenght of the side.
+
+                        //filled the matrix 
+                        AreaID(i,0) = i;
+                        AreaID(i,1) = pow(meanL,2); //area of the tag.
+                }
+
+                //now an avarage weighted to estimate the position.
+
+                double WeightTot = 0;
+				for(int i =0; i <AreaID.rows(); i++){
+                	vision_pose.position[0] += A_det.detections[AreaID(i,0)].pose.position.x * AreaID(i,1);	
+                	vision_pose.position[1] += A_det.detections[AreaID(i,0)].pose.position.y * AreaID(i,1);
+                	vision_pose.position[2] += A_det.detections[AreaID(i,0)].pose.position.z * AreaID(i,1);
+                	
+                	vision_pose.orientation[0] += A_det.detections[AreaID(i,0)].pose.orientation.x * AreaID(i,1);
+                 	vision_pose.orientation[1] += A_det.detections[AreaID(i,0)].pose.orientation.y * AreaID(i,1);
+                 	vision_pose.orientation[2] += A_det.detections[AreaID(i,0)].pose.orientation.z * AreaID(i,1);
+                	vision_pose.orientation[3] += A_det.detections[AreaID(i,0)].pose.orientation.w * AreaID(i,1);
+
+                	WeightTot +=AreaID(i,1);
+                }
+				
+
+                vision_pose.position[0] = (vision_pose.position[0])/WeightTot;
+                vision_pose.position[1] = (vision_pose.position[1])/WeightTot;
+                vision_pose.position[2] = (vision_pose.position[2])/WeightTot;
+
+                vision_pose.velocity[0] = 0;
+                vision_pose.velocity[1] = 0;
+                vision_pose.velocity[2] = 0;
+
+                vision_pose.orientation[0] = (vision_pose.orientation[0])/WeightTot; 
+                vision_pose.orientation[1] = (vision_pose.orientation[1])/WeightTot; 
+                vision_pose.orientation[2] = (vision_pose.orientation[2])/WeightTot;
+                vision_pose.orientation[3] = (vision_pose.orientation[3])/WeightTot;
+
+            	//DEBUG
+            	std::cout<<"x: "<<vision_pose.position[0]<<std::endl; 
+                std::cout<<"y: "<<vision_pose.position[1]<<std::endl;           
+				std::cout<<"z: "<<vision_pose.position[2]<<std::endl;
+		
+
+               handler4.publish("apriltag_vision_system",&vision_pose);
+               //lcm publication.
+
+	}
+
+
+	
+}
+
+
+
+
+
 
 int main(int argc, char **argv)
 {
@@ -72,17 +151,20 @@ int main(int argc, char **argv)
     //ROS helpers
     ros::init(argc, argv, "ros2lcm_bridge");
     ros::NodeHandle n;
-    ros::Subscriber odometry_sub = n.subscribe("/mavros/local_position/odom",1,&odometryCallback);
+
+    ros::Subscriber odometry_sub = n.subscribe("/mavros/local_position/odom",1,&odometryCallback);//ros topic for odom of the robot.
     ros::Subscriber state_sub = n.subscribe("/mavros/state",1,&stateCallback);
     ros::Subscriber state_extended_sub = n.subscribe("/mavros/extended_state",1,&EStateCallback);
+    ros::Subscriber state_extended_sub = n.subscribe("/apriltags/detections",1,&ApriltagCallback);//apriltags system.
+
 
     ros::Publisher  pub  = n.advertise<geometry_msgs::PoseStamped>("/mavros/setpoint_position/local",1);
-    ros::Publisher  pub1 = n.advertise<nav_msgs::Odometry>("/platform_position",1);
+    ros::Publisher  pub1 = n.advertise<nav_msgs::Odometry>("/global_platform_position",1);
     ros::Publisher  pub2 = n.advertise<geometry_msgs::TwistStamped>("/mavros/setpoint_velocity/cmd_vel",1);
 
     //LCM stuff
     lcm::Subscription *sub2 = handler2.subscribe("local_position_sp", &CallbackHandler::positionSetpointCallback, &call);
-    lcm::Subscription *sub3 = handler3.subscribe("platRob"    , &CallbackHandler::visionEstimateCallback, &call);
+    lcm::Subscription *sub3 = handler3.subscribe("Landing_Site/pose"    , &CallbackHandler::visionEstimateCallback, &call);
     sub2->setQueueCapacity(1);
     sub3->setQueueCapacity(1);
 
