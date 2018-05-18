@@ -2,5 +2,5 @@
 
 ## Objective:
 
-It is a ROS package and it converts ROS topic into LCM one and viceversa.
+It is a ROS package to convert ROS topics into LCM ones and viceversa.
 Such branch also converts Apriltag ROS topics for vision feedback.
