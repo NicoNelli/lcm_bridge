@@ -1,3 +1,6 @@
 # Bridge between ROS and LCM
 
-##The VisionSystem branch also converts Apriltag ROS topic for vision feedback.
+## Objective:
+
+It is a ROS package and it converts ROS topic into LCM one and viceversa.
+Such branch also converts Apriltag ROS topics for vision feedback.
