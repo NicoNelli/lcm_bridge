@@ -11,7 +11,7 @@
 #include "nav_msgs/Odometry.h"
 #include <poll.h>
 #include <Eigen/Core>
-#include <Eigen/geometry>
+#include <Eigen/Geometry>
 #include "apriltags/AprilTagDetections.h"
 
 lcm::LCM handler, handler2, handler3, handler4;
@@ -155,7 +155,7 @@ int main(int argc, char **argv)
     ros::Subscriber odometry_sub = n.subscribe("/mavros/local_position/odom",1,&odometryCallback);//ros topic for odom of the robot.
     ros::Subscriber state_sub = n.subscribe("/mavros/state",1,&stateCallback);
     ros::Subscriber state_extended_sub = n.subscribe("/mavros/extended_state",1,&EStateCallback);
-    ros::Subscriber state_extended_sub = n.subscribe("/apriltags/detections",1,&ApriltagCallback);//apriltags system.
+    ros::Subscriber relative_pose_sub = n.subscribe("/apriltags/detections",1,&ApriltagCallback);//apriltags system.
 
 
     ros::Publisher  pub  = n.advertise<geometry_msgs::PoseStamped>("/mavros/setpoint_position/local",1);
