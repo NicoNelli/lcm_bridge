@@ -152,14 +152,14 @@ include_directories(
 # add_dependencies(lcm_brigde ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 ## Declare a C++ executable
- add_executable(lcm_brigde_node src/bridge_node.cpp ${M2M_INCLUDE}/../src/MavState.cpp)
+ add_executable(bridge_node src/bridge_node.cpp ${M2M_INCLUDE}/../src/MavState.cpp)
 
 ## Add cmake target dependencies of the executable
 ## same as for the library above
 # add_dependencies(lcm_brigde_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 ## Specify libraries to link a library or executable target against
-target_link_libraries(lcm_brigde_node
+target_link_libraries(bridge_node
         ${catkin_LIBRARIES}
         ${PROJECT_LINK_LIBS}
         ${LCM_LIBRARIES}
