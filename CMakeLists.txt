@@ -152,7 +152,8 @@ include_directories(
 # add_dependencies(lcm_brigde ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 ## Declare a C++ executable
- add_executable(bridge_node src/bridge_node.cpp ${M2M_INCLUDE}/../src/MavState.cpp)
+ add_executable(bridge_node src/bridge_node.cpp ${M2M_INCLUDE}/../include/common/MavState.cpp)
+
 
 ## Add cmake target dependencies of the executable
 ## same as for the library above
