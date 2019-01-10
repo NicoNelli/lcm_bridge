@@ -5,6 +5,7 @@
 #include "mavros_msgs/State.h"
 #include "mavros_msgs/ExtendedState.h"
 #include "lcm_messages/geometry/pose.hpp"
+#include "lcm_messages/geometry/vision.hpp"
 #include "lcm_messages/exec/state.hpp"
 #include "common/MavState.h"
 #include "common/CallbackHandler.hpp"
@@ -13,6 +14,8 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include "apriltags/AprilTagDetections.h"
+#include <cmath>
+#include <queue>
 
 lcm::LCM handler, handler2, handler3, handler4;
 geometry::pose lcm_pose;
@@ -22,7 +25,28 @@ mavros_msgs::State disarmed;
 mavros_msgs::ExtendedState landed;
 CallbackHandler call;
 
-geometry::pose vision_pose; //lcm message for vision topic.
+geometry::vision vision_pose; //lcm message for vision topic.
+
+Eigen::Matrix4d zero_T_drone;
+Eigen::Matrix4d zero_T_plat;
+Eigen::Matrix4d drone_T_plat;
+
+typedef std::queue<double> queue_t;
+queue_t Queue_roll;
+queue_t Queue_pitch;
+queue_t Queue_yaw;
+double integral_roll = 0;
+double integral_pitch = 0;
+double integral_yaw = 0;
+double roll;
+double pitch;
+double yaw;
+
+
+bool drone = false;
+bool platform = false;
+
+
 
 bool firstState = true;
 bool firstEState = true;
@@ -42,9 +66,79 @@ void odometryCallback(nav_msgs::Odometry pose){
     lcm_pose.orientation[2] = pose.pose.pose.orientation.y;
     lcm_pose.orientation[3] = pose.pose.pose.orientation.z;
 
+    //Here i have to build the transformation matrix between the drone and absolute reference frame
+    /*
+    Eigen::Quaterniond q2;
+    q2.x() = pose.pose.pose.orientation.x;
+    q2.y() = pose.pose.pose.orientation.y;
+    q2.z() = pose.pose.pose.orientation.z;
+    q2.w() = pose.pose.pose.orientation.w;
+
+    Eigen:: Matrix3d R2 = q2.normalized().toRotationMatrix();
+
+    zero_T_drone << R2(0,0), R2(0,1), R2(0,2), lcm_pose.position[0],
+                    R2(1,0), R2(1,1), R2(1,2), lcm_pose.position[1], 
+                    R2(2,0), R2(2,1), R2(2,2), lcm_pose.position[2],
+                          0,       0,       0,                    1;
+
+    zero_T_drone = zero_T_drone.inverse().eval();
+
+    std::cout <<"ciao"<< std::endl;
+    drone = true;
+*/
+
+
+
     handler.publish("vision_position_estimate",&lcm_pose);
 
 }
+
+double movingFilter(double raw, std::queue<double> *queue_t, double *integral){
+
+    int window = 12;
+    if( queue_t->size() == window){
+
+        *integral += raw - queue_t->front(); //return the oldest element of the FIFO queue
+        queue_t->pop();
+
+    }
+    else
+        *integral += raw;
+
+    //std::cout<<""<<*integral<<std::endl;
+
+
+    queue_t->push(raw);
+    
+    return *integral/queue_t->size();
+
+
+}
+
+void toEulerAngle(double quaternion[], double *Roll, double *Pitch, double *Yaw){
+
+    //roll (x-axis rotation)
+    double sinr_cosp = 2.0*( quaternion[3]*quaternion[0] + quaternion[1]*quaternion[2] );
+    double cosr_cosp = 1.0 - 2.0*( quaternion[0]*quaternion[0] + quaternion[1]*quaternion[1] );
+
+    *Roll = atan(sinr_cosp/cosr_cosp); 
+
+    //pitch (y-axis rotation)
+    double sinp = 2.0*( quaternion[3]*quaternion[1] - quaternion[2]*quaternion[0] );
+    
+    if(fabs(sinp) >= 1)
+        *Pitch = copysign(M_PI/2,sinp); //use 90 degrees if out of range
+    else
+        *Pitch = asin(sinp);
+
+    //yaw (z-axis rotation)
+    double siny_cosp = 2.0*( quaternion[3]*quaternion[2] + quaternion[0]*quaternion[1] );
+    double cosy_cosp = 1.0 -2.0*( quaternion[1]*quaternion[1] + quaternion[3]*quaternion[3] );
+    *Yaw = atan2(siny_cosp,cosy_cosp);
+
+}
+
+
 
 void stateCallback(mavros_msgs::State s){
 
@@ -125,11 +219,20 @@ void ApriltagCallback(apriltags::AprilTagDetections A_det){
                 vision_pose.orientation[2] = (vision_pose.orientation[2])/WeightTot;
                 vision_pose.orientation[3] = (vision_pose.orientation[3])/WeightTot;
 
+                toEulerAngle(vision_pose.orientation, &roll, &pitch, &yaw);
+                //moving filter to clean a bit the data
+
             	//DEBUG
-            	std::cout<<"x: "<<vision_pose.position[0]<<std::endl; 
-                std::cout<<"y: "<<vision_pose.position[1]<<std::endl;           
-				std::cout<<"z: "<<vision_pose.position[2]<<std::endl;
-		
+            	//std::cout<<"x: "<<vision_pose.position[0]<<std::endl; 
+                //std::cout<<"y: "<<vision_pose.position[1]<<std::endl;           
+				//std::cout<<"z: "<<vision_pose.position[2]<<std::endl;
+		        //std::cout<<"Roll_clean: "<<movingFilter(roll, &Queue_roll, &integral_roll)<<std::endl; 
+                //std::cout<<"Pitch: "<<movingFilter(pitch, &Queue_pitch, &integral_pitch)<<std::endl;           
+                //std::cout<<"Yaw: "<<movingFilter(yaw, &Queue_yaw, &integral_yaw)<<std::endl;
+                vision_pose.roll = movingFilter(roll, &Queue_roll, &integral_roll);
+                vision_pose.pitch = movingFilter(pitch, &Queue_pitch, &integral_pitch);
+                vision_pose.yaw = movingFilter(yaw, &Queue_yaw, &integral_yaw);
+
 
                handler4.publish("apriltag_vision_system",&vision_pose);
                //lcm publication.
@@ -140,9 +243,40 @@ void ApriltagCallback(apriltags::AprilTagDetections A_det){
 	
 }
 
+void PlatformCallback(geometry_msgs::PoseStamped msg){
 
+    //Here i have to build the transformation matrix between the drone and absolute reference frame
+    
+    Eigen::Quaterniond q3;
+    q3.x() = msg.pose.orientation.x;
+    q3.y() = msg.pose.orientation.y;
+    q3.z() = msg.pose.orientation.z;
+    q3.w() = msg.pose.orientation.w;
 
+    Eigen:: Matrix3d R3 = q3.normalized().toRotationMatrix();
 
+    zero_T_plat << R3(0,0), R3(0,1), R3(0,2), msg.pose.position.x,
+                   R3(1,0), R3(1,1), R3(1,2), msg.pose.position.y, 
+                   R3(2,0), R3(2,1), R3(2,2), msg.pose.position.z,
+                          0,       0,       0,                    1;
+
+    bool platform = true;
+
+    std::cout <<"ciao2"<< std::endl;
+
+    if(drone && platform){
+
+        drone_T_plat = zero_T_drone * zero_T_plat;
+
+        Eigen::RowVectorXd error(3);
+        error << drone_T_plat(0,3), drone_T_plat(1,3),drone_T_plat(2,3);
+        std::cout << "error: " << error << std::endl; 
+
+    }
+
+    
+
+}
 
 
 int main(int argc, char **argv)
@@ -158,9 +292,13 @@ int main(int argc, char **argv)
     ros::Subscriber relative_pose_sub = n.subscribe("/apriltags/detections",1,&ApriltagCallback);//apriltags system.
 
 
+
     ros::Publisher  pub  = n.advertise<geometry_msgs::PoseStamped>("/mavros/setpoint_position/local",1);
     ros::Publisher  pub1 = n.advertise<nav_msgs::Odometry>("/global_platform_position",1);
     ros::Publisher  pub2 = n.advertise<geometry_msgs::TwistStamped>("/mavros/setpoint_velocity/cmd_vel",1);
+
+    //ros::Subscriber PLatformPose_sub = n.subscribe("/global_platform_position",1,&PlatformCallback);
+
 
     //LCM stuff
     lcm::Subscription *sub2 = handler2.subscribe("local_position_sp", &CallbackHandler::positionSetpointCallback, &call);
@@ -224,7 +362,7 @@ int main(int argc, char **argv)
                 commandPose.pose.orientation.z = call._position_sp.getOrientation().z();
                 commandPose.pose.orientation.w = call._position_sp.getOrientation().w();
 
-                std::cout << "command: " << commandPose.pose.position.x << " " << commandPose.pose.position.y << " " <<commandPose.pose.position.z << std::endl;
+                //std::cout << "command: " << commandPose.pose.position.x << " " << commandPose.pose.position.y << " " <<commandPose.pose.position.z << std::endl;
                 pub.publish(commandPose);
             }
             else if(call._position_sp.getType() == MavState::type::VELOCITY) {
