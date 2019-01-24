@@ -4,6 +4,7 @@
 #include "geometry_msgs/TwistStamped.h"
 #include "mavros_msgs/State.h"
 #include "mavros_msgs/ExtendedState.h"
+#include "mavros_msgs/ParamSet.h"
 #include "lcm_messages/geometry/pose.hpp"
 #include "lcm_messages/geometry/vision.hpp"
 #include "lcm_messages/exec/state.hpp"
@@ -27,10 +28,7 @@ CallbackHandler call;
 
 geometry::vision vision_pose; //lcm message for vision topic.
 
-Eigen::Matrix4d zero_T_drone;
-Eigen::Matrix4d zero_T_plat;
-Eigen::Matrix4d drone_T_plat;
-
+//To estimate roll&pitch&yaw.
 typedef std::queue<double> queue_t;
 queue_t Queue_roll;
 queue_t Queue_pitch;
@@ -42,14 +40,27 @@ double roll;
 double pitch;
 double yaw;
 
-
+/*
 bool drone = false;
 bool platform = false;
-
-
+Eigen::Matrix4d zero_T_drone;
+Eigen::Matrix4d zero_T_plat;
+Eigen::Matrix4d drone_T_plat;
+*/
 
 bool firstState = true;
 bool firstEState = true;
+
+//To compute odometry using vision feedback
+mavros_msgs::ParamSet switchingEstimator;
+mavros_msgs::ParamValue efk2_value;
+bool vision = true;
+double xPrevious = 0;
+double yPrevious = 0;
+double zPrevious = 0;
+geometry_msgs::PoseStamped visionOdometry; //odometry performed using vision feedback
+ros::Publisher  pub_vision_odom;
+ros::ServiceClient set_mode_estimatorClient;
 
 void odometryCallback(nav_msgs::Odometry pose){
 
@@ -82,8 +93,6 @@ void odometryCallback(nav_msgs::Odometry pose){
                           0,       0,       0,                    1;
 
     zero_T_drone = zero_T_drone.inverse().eval();
-
-    std::cout <<"ciao"<< std::endl;
     drone = true;
 */
 
@@ -104,9 +113,6 @@ double movingFilter(double raw, std::queue<double> *queue_t, double *integral){
     }
     else
         *integral += raw;
-
-    //std::cout<<""<<*integral<<std::endl;
-
 
     queue_t->push(raw);
     
@@ -226,23 +232,51 @@ void ApriltagCallback(apriltags::AprilTagDetections A_det){
             	//std::cout<<"x: "<<vision_pose.position[0]<<std::endl; 
                 //std::cout<<"y: "<<vision_pose.position[1]<<std::endl;           
 				//std::cout<<"z: "<<vision_pose.position[2]<<std::endl;
-		        //std::cout<<"Roll_clean: "<<movingFilter(roll, &Queue_roll, &integral_roll)<<std::endl; 
-                //std::cout<<"Pitch: "<<movingFilter(pitch, &Queue_pitch, &integral_pitch)<<std::endl;           
-                //std::cout<<"Yaw: "<<movingFilter(yaw, &Queue_yaw, &integral_yaw)<<std::endl;
                 vision_pose.roll = movingFilter(roll, &Queue_roll, &integral_roll);
                 vision_pose.pitch = movingFilter(pitch, &Queue_pitch, &integral_pitch);
                 vision_pose.yaw = movingFilter(yaw, &Queue_yaw, &integral_yaw);
 
 
+                //vision odometry
+                visionOdometry.pose.position.x = lcm_pose.position[0] + (vision_pose.position[0] - xPrevious);
+                visionOdometry.pose.position.y = lcm_pose.position[1] + (vision_pose.position[1] - yPrevious);
+                visionOdometry.pose.position.z = lcm_pose.position[2] + (vision_pose.position[2] - zPrevious);
+
+				xPrevious = vision_pose.position[0];
+                yPrevious = vision_pose.position[1];
+                zPrevious = vision_pose.position[2];
+
+                
+                if(vision){
+                	efk2_value.real = 0;
+                	efk2_value.integer = 9;
+                	switchingEstimator.request.value = efk2_value;
+                	switchingEstimator.request.param_id = "EKF2_AID_MASK";
+                	set_mode_estimatorClient.call(switchingEstimator);
+
+                	vision = false;
+                }
+
+
+               pub_vision_odom.publish(visionOdometry);
                handler4.publish("apriltag_vision_system",&vision_pose);
                //lcm publication.
 
 	}
-
-
+	else{
+ 		if(!vision){
+    		efk2_value.real = 0;
+            efk2_value.integer = 1;
+            switchingEstimator.request.value = efk2_value;
+            switchingEstimator.request.param_id = "EKF2_AID_MASK";
+            set_mode_estimatorClient.call(switchingEstimator);
+			vision = true;
+        }
+    }
 	
 }
 
+/*
 void PlatformCallback(geometry_msgs::PoseStamped msg){
 
     //Here i have to build the transformation matrix between the drone and absolute reference frame
@@ -262,8 +296,6 @@ void PlatformCallback(geometry_msgs::PoseStamped msg){
 
     bool platform = true;
 
-    std::cout <<"ciao2"<< std::endl;
-
     if(drone && platform){
 
         drone_T_plat = zero_T_drone * zero_T_plat;
@@ -274,10 +306,8 @@ void PlatformCallback(geometry_msgs::PoseStamped msg){
 
     }
 
-    
-
 }
-
+*/
 
 int main(int argc, char **argv)
 {
@@ -291,6 +321,10 @@ int main(int argc, char **argv)
     ros::Subscriber state_extended_sub = n.subscribe("/mavros/extended_state",1,&EStateCallback);
     ros::Subscriber relative_pose_sub = n.subscribe("/apriltags/detections",1,&ApriltagCallback);//apriltags system.
 
+
+    //publish vision odometry
+    pub_vision_odom = n.advertise<geometry_msgs::PoseStamped>("/mavros/vision_pose/pose",1);
+    set_mode_estimatorClient = n.serviceClient<mavros_msgs::ParamSet>("/mavros/param/set");
 
 
     ros::Publisher  pub  = n.advertise<geometry_msgs::PoseStamped>("/mavros/setpoint_position/local",1);
