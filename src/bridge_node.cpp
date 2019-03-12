@@ -1,46 +1,161 @@
 #include "lcm/lcm-cpp.hpp"
-#include "ros/ros.h"
-#include "geometry_msgs/PoseStamped.h"
-#include "geometry_msgs/TwistStamped.h"
-#include "mavros_msgs/State.h"
-#include "mavros_msgs/ExtendedState.h"
+#include "rclcpp/rclcpp.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
+#include "geometry_msgs/msg/twist_stamped.hpp"
+//#include "mavros_msgs/State.h"
+//#include "mavros_msgs/ExtendedState.h"
+//#include "mavros_msgs/ParamSet.h"
 #include "lcm_messages/geometry/pose.hpp"
+#include "lcm_messages/geometry/vision.hpp"
 #include "lcm_messages/exec/state.hpp"
 #include "common/MavState.h"
 #include "common/CallbackHandler.hpp"
-#include "nav_msgs/Odometry.h"
+#include "nav_msgs/msg/Odometry.hpp"
 #include <poll.h>
+#include <Eigen/Core>
+#include <Eigen/Geometry>
+#include "apriltags/AprilTagDetections.h"
+#include <cmath>
+#include <queue>
 
-lcm::LCM handler, handler2, handler3;
+
+lcm::LCM handler, handler2, handler3, handler4;
 geometry::pose lcm_pose;
 exec::state robot_state;
-nav_msgs::Odometry platPos;
-mavros_msgs::State disarmed;
-mavros_msgs::ExtendedState landed;
+//nav_msgs::Odometry platPos;
+auto platPos = std::make_shared<nav_msgs::msg::Odometry>();
+
+//mavros_msgs::State disarmed;
+//mavros_msgs::ExtendedState landed;
 CallbackHandler call;
+
+
+//these variable are used to estimate the position of the camera respect to the UAV.
+Eigen::Matrix4d Cam_T_plat;
+Eigen::Matrix4d zero_T_plat;
+Eigen::Matrix4d zero_T_drone;
+Eigen::Matrix4d drone_T_plat;
+Eigen::Matrix4d drone_T_camera;
+
+
+bool drone = false;
+bool camera = false;
+bool platform = false;
+
+//STOP
+
+
+
+geometry::vision vision_pose; //lcm message for vision topic.
+
+typedef std::queue<double> queue_t;
+queue_t Queue_roll;
+queue_t Queue_pitch;
+queue_t Queue_yaw;
+double integral_roll = 0;
+double integral_pitch = 0;
+double integral_yaw = 0;
+double roll;
+double pitch;
+double yaw;
 
 bool firstState = true;
 bool firstEState = true;
 
-void odometryCallback(nav_msgs::Odometry pose){
+//void odometryCallback(nav_msgs::Odometry pose){ //the callback of pose of the UAV computed via the motion capture system.
+void odometryCallback(const nav_msgs::msg::Odometry::SharedPtr pose){
 
-    lcm_pose.position[0] =  pose.pose.pose.position.x;
-    lcm_pose.position[1] =  pose.pose.pose.position.y;
-    lcm_pose.position[2] =  pose.pose.pose.position.z;
+    lcm_pose.position[0] =  pose->pose.pose.position.x;
+    lcm_pose.position[1] =  pose->pose.pose.position.y;
+    lcm_pose.position[2] =  pose->pose.pose.position.z;
 
-    lcm_pose.velocity[0] = pose.twist.twist.linear.x;
-    lcm_pose.velocity[1] = pose.twist.twist.linear.y;
-    lcm_pose.velocity[2] = pose.twist.twist.linear.z;
+    lcm_pose.velocity[0] = pose->twist.twist.linear.x;
+    lcm_pose.velocity[1] = pose->twist.twist.linear.y;
+    lcm_pose.velocity[2] = pose->twist.twist.linear.z;
 
-    lcm_pose.orientation[0] = pose.pose.pose.orientation.w;
-    lcm_pose.orientation[1] = pose.pose.pose.orientation.x;
-    lcm_pose.orientation[2] = pose.pose.pose.orientation.y;
-    lcm_pose.orientation[3] = pose.pose.pose.orientation.z;
+    lcm_pose.orientation[0] = pose->pose.pose.orientation.w;
+    lcm_pose.orientation[1] = pose->pose.pose.orientation.x;
+    lcm_pose.orientation[2] = pose->pose.pose.orientation.y;
+    lcm_pose.orientation[3] = pose->pose.pose.orientation.z;
+
+
+     //Here I have to build the trasformation matrix between the drone and absolue reference frame.
+	//useful to estimate the position of the camera respect to the UAV
+	/*	
+	Eigen::Quaterniond q2;
+	q2.x() = pose.pose.pose.orientation.x;
+	q2.y() = pose.pose.pose.orientation.y;
+	q2.z() = pose.pose.pose.orientation.z;
+	q2.w() = pose.pose.pose.orientation.w;
+				
+	Eigen::Matrix3d R2 = q2.normalized().toRotationMatrix();
+				
+	zero_T_drone<<R2(0,0), R2(0,1), R2(0,2), lcm_pose.position[0],
+			      R2(1,0), R2(1,1), R2(1,2), lcm_pose.position[1],	
+				  R2(2,0), R2(2,1), R2(2,2), lcm_pose.position[2],
+					    0,       0,       0, 1;
+
+	zero_T_drone = zero_T_drone.inverse().eval(); //inverse
+	
+	//std::cout<<"d_T_0:"<<zero_T_drone<<std::endl;	
+
+	//Drone << lcm_pose.position[0], lcm_pose.position[1], lcm_pose.position[2];
+			
+	drone = true;	
+
+	
+//STOP
+*/
 
     handler.publish("vision_position_estimate",&lcm_pose);
 
 }
 
+double movingFilter(double raw, std::queue<double> *queue_t, double *integral){
+	
+	int window = 120;
+	if(queue_t->size() == window){
+		
+		*integral += raw - queue_t->front();
+		queue_t->pop();
+
+	}
+	else
+		*integral +=raw;
+
+	queue_t->push(raw);
+
+	return *integral/queue_t->size();
+
+
+}
+
+void toEulerAngle(double quaternion[], double *Roll, double *Pitch, double *Yaw){
+
+	//roll (x-axis rotation)
+	double sinr_cosp = 2.0 *( quaternion[3]*quaternion[0] + quaternion[1]*quaternion[2] );
+	double cosr_cosp = 1.0 - 2.0*( quaternion[0]*quaternion[0] + quaternion[1]*quaternion[1] );
+
+	*Roll = atan( sinr_cosp/cosr_cosp );
+
+	//pitch (y-axis rotation)
+	double sinp = 2.0*( quaternion[3]*quaternion[1] + quaternion[2]*quaternion[0] );
+	
+	if( fabs(sinp) >= 1 )
+		
+		*Pitch = copysign(M_PI/2,sinp); //use 90 degrees if out of range
+
+	else
+		*Pitch = asin(sinp);
+
+	//yaw (z-axis rotation)
+	double siny_cosp = 2.0 *( quaternion[3]*quaternion[2] + quaternion[0]*quaternion[1] );
+	double cosy_cosp = 1.0 - 2.0*( quaternion[1]*quaternion[1] + quaternion[3]*quaternion[3] );
+	*Yaw = atan2(siny_cosp,cosy_cosp);
+
+}
+
+/*
 void stateCallback(mavros_msgs::State s){
 
     if (firstState) {
@@ -53,6 +168,8 @@ void stateCallback(mavros_msgs::State s){
     else robot_state.armed = 1;
 
 }
+*/
+/*
 void EStateCallback(mavros_msgs::ExtendedState es){
 
     if (firstEState) {
@@ -64,25 +181,205 @@ void EStateCallback(mavros_msgs::ExtendedState es){
     else robot_state.landed = 0;
 
 }
+*/
+
+/*
+void ApriltagCallback(apriltags::AprilTagDetections A_det){
+			
+        if( A_det.detections.size() >0 ){ //check if there is at least one detected tag.
+
+                Eigen::MatrixXd AreaID(A_det.detections.size(),2); //in each row, there is the area of the tag and its index in the vector.
+
+                Eigen::Vector3d rel_pose; //relative position choosen.
+
+                for(int i=0; i< A_det.detections.size(); i++){ //for each tag, it computes each side of the square.
+		
+                        double l1 = sqrt(pow(A_det.detections[i].corners2d[1].y - A_det.detections[i].corners2d[0].y, 2)+pow(A_det.detections[i].corners2d[1].x - A_det.detections[i].corners2d[0].x,2));
+		
+                        double l2 = sqrt(pow(A_det.detections[i].corners2d[2].y - A_det.detections[i].corners2d[1].y, 2)+pow(A_det.detections[i].corners2d[2].x - A_det.detections[i].corners2d[1].x,2));
+	
+                        double l3 = sqrt(pow(A_det.detections[i].corners2d[3].y - A_det.detections[i].corners2d[2].y, 2)+pow(A_det.detections[i].corners2d[3].x - A_det.detections[i].corners2d[2].x,2));
+
+                        double l4 = sqrt(pow(A_det.detections[i].corners2d[0].y - A_det.detections[i].corners2d[3].y, 2)+pow(A_det.detections[i].corners2d[0].x - A_det.detections[i].corners2d[3].x,2));
+		
+                        double meanL = (l1 + l2 + l3 + l4)/4; //mean value of the lenght of the side.
+
+                        //filled the matrix 
+                        AreaID(i,0) = i;
+                        AreaID(i,1) = pow(meanL,2); //area of the tag.
+                }
+
+                //now an avarage weighted to estimate the position.
+
+                double WeightTot = 0;
+				for(int i =0; i <AreaID.rows(); i++){
+                	vision_pose.position[0] += A_det.detections[AreaID(i,0)].pose.position.x * AreaID(i,1);	
+                	vision_pose.position[1] += A_det.detections[AreaID(i,0)].pose.position.y * AreaID(i,1);
+                	vision_pose.position[2] += A_det.detections[AreaID(i,0)].pose.position.z * AreaID(i,1);
+                	
+                	vision_pose.orientation[0] += A_det.detections[AreaID(i,0)].pose.orientation.x * AreaID(i,1);
+                 	vision_pose.orientation[1] += A_det.detections[AreaID(i,0)].pose.orientation.y * AreaID(i,1);
+                 	vision_pose.orientation[2] += A_det.detections[AreaID(i,0)].pose.orientation.z * AreaID(i,1);
+                	vision_pose.orientation[3] += A_det.detections[AreaID(i,0)].pose.orientation.w * AreaID(i,1);
+
+                	WeightTot +=AreaID(i,1);
+                }
+				
+
+                vision_pose.position[0] = (vision_pose.position[0])/WeightTot;
+                vision_pose.position[1] = (vision_pose.position[1])/WeightTot;
+                vision_pose.position[2] = (vision_pose.position[2])/WeightTot;
+
+                vision_pose.velocity[0] = 0;
+                vision_pose.velocity[1] = 0;
+                vision_pose.velocity[2] = 0;
+
+                vision_pose.orientation[0] = (vision_pose.orientation[0])/WeightTot; 
+                vision_pose.orientation[1] = (vision_pose.orientation[1])/WeightTot; 
+                vision_pose.orientation[2] = (vision_pose.orientation[2])/WeightTot;
+                vision_pose.orientation[3] = (vision_pose.orientation[3])/WeightTot;
+
+            	//DEBUG
+            	std::cout<<"x: "<<vision_pose.position[0]<<std::endl; 
+                std::cout<<"y: "<<vision_pose.position[1]<<std::endl;           
+				std::cout<<"z: "<<vision_pose.position[2]<<std::endl;
+		
+				
+				//
+				//I have to build the trasformation matrix between the platform and the camera
+				//just to estimate the position of the camera respect to the drone.
+				
+				//here the transformation matrix of the platform respect to camera frame
+				//Eigen::Quaterniond q;
+				//q.x() = vision_pose.orientation[0];
+				//q.y() = vision_pose.orientation[1];
+				//q.z() = vision_pose.orientation[2];
+				//q.w() = vision_pose.orientation[3];
+				
+				//Eigen::Matrix3d R10 = q.normalized().toRotationMatrix();
+				
+				
+
+				//Cam_T_plat << R10(0,0), R10(0,1), R10(0,2), vision_pose.position[0],
+				//			  R10(1,0), R10(1,1), R10(1,2), vision_pose.position[1],	
+				//			  R10(2,0), R10(2,1), R10(2,2), vision_pose.position[2],
+				//				   0,      0,      0,1;
+				
+				//std::cout<<"Cam_T_plat:\n"<<Cam_T_plat<<std::endl;
+				
+				
+				//Cam_T_plat=Cam_T_plat.inverse().eval(); //inverse			
+				//camera = true;
+				
+								
+
+				//STOP
+				
+					
+				
+                //toEulerAngle(vision_pose.orientation,&roll,&pitch,&yaw);				
+				//moving filter to clean a bit the data
+
+				//vision_pose.roll = movingFilter(roll,&Queue_roll,&integral_roll);
+				//vision_pose.pitch = movingFilter(pitch,&Queue_pitch,&integral_pitch);
+				//vision_pose.yaw = movingFilter(yaw,&Queue_yaw,&integral_yaw);
+
+                handler4.publish("apriltag_vision_system",&vision_pose);
+               //lcm publication.
+
+	}
+	
+}
+*/
+
+//USED JUST TO COMPUTE THE POSITION OF THE PLATFORM RESPECT TO THE MOTION
+//CAPTURE FRAME.
+//HERE THE TRANSFORMATION MATRIX OF THE PLATFORM RESPECT TO THE ABSOLUTE REF FRAME.
+/*
+void PlatformCallback(geometry_msgs::PoseStamped msg){
+	
+	//Plat << msg.pose.position.x, msg.pose.position.y, msg.pose.position.z;
+
+	Eigen::Quaterniond q3;
+	q3.x() = msg.pose.orientation.x;
+	q3.y() = msg.pose.orientation.y;
+	q3.z() = msg.pose.orientation.z;
+	q3.w() = msg.pose.orientation.w;
+				
+	Eigen::Matrix3d R3 = q3.normalized().toRotationMatrix();
+				
+	zero_T_plat <<R3(0,0), R3(0,1), R3(0,2), msg.pose.position.x,
+			      R3(1,0), R3(1,1), R3(1,2), msg.pose.position.y,	
+				  R3(2,0), R3(2,1), R3(2,2), msg.pose.position.z,
+					    0,       0,       0, 1;
+	
+	bool platform = true;
+
+	if(drone && camera && platform){
+		
+		//Eigen::RowVectorXd temp(3);
+		//Eigen::RowVectorXd temp2(3);
+		//temp = Cam - Drone;
+		//temp2 = zero_T_drone*temp.transpose();
+		//std::cout<<"drone:\n"<<temp2<<std::endl;
+
+
+		drone_T_plat = zero_T_drone * zero_T_plat;
+		
+		//std::cout<<"drone_T_plat:\n"<<drone_T_plat<<std::endl;
+
+		drone_T_camera = drone_T_plat * Cam_T_plat;
+
+		//std::cout<<"drone_T_camera:\n"<<drone_T_camera<<std::endl;
+
+	}
+
+
+}
+//STOP
+*/
 
 
 int main(int argc, char **argv)
 {
 
     //ROS helpers
-    ros::init(argc, argv, "ros2lcm_bridge");
-    ros::NodeHandle n;
-    ros::Subscriber odometry_sub = n.subscribe("/mavros/local_position/odom",1,&odometryCallback);
-    ros::Subscriber state_sub = n.subscribe("/mavros/state",1,&stateCallback);
-    ros::Subscriber state_extended_sub = n.subscribe("/mavros/extended_state",1,&EStateCallback);
+    //ros::init(argc, argv, "ros2lcm_bridge");
+    //ros::NodeHandle n;
+    rclcpp::init(argc, argv);
+    auto node = rclcpp::Node::make_shared("ros2lcm_bridge");
+    //Starting with C++11,When initializing a variable, the auto keyword can be used in place of the variable type to tell the compiler to infer the variable’s type from the initializer’s type. This is called type inference (also sometimes called type deduction).
+    //EX: auto d = 5.0; // 5.0 is a double literal, so d will be type double
 
-    ros::Publisher  pub  = n.advertise<geometry_msgs::PoseStamped>("/mavros/setpoint_position/local",1);
-    ros::Publisher  pub1 = n.advertise<nav_msgs::Odometry>("/platform_position",1);
-    ros::Publisher  pub2 = n.advertise<geometry_msgs::TwistStamped>("/mavros/setpoint_velocity/cmd_vel",1);
+    
+    //ros::Subscriber odometry_sub = n.subscribe("/mavros/local_position/odom",1,&odometryCallback);//ros topic for odom of the robot.
+    //ros::Subscriber state_sub = n.subscribe("/mavros/state",1,&stateCallback);
+    //ros::Subscriber state_extended_sub = n.subscribe("/mavros/extended_state",1,&EStateCallback);
+    //ros::Subscriber relative_pose_sub = n.subscribe("/apriltags/detections",1,&ApriltagCallback);//apriltags system.
 
+    auto odometry_sub = node->create_subscription<std_msgs::msg::Float32>("/mavros/local_position/odom", odometryCallback, rmw_qos_profile_default);
+    
+    auto state_sub = node->create_subscription<std_msgs::msg::Float32>("/mavros/state", stateCallback, rmw_qos_profile_default);
+    
+    auto state_extended_sub = node->create_subscription<std_msgs::msg::Float32>("/mavros/extended_state", EStateCallback, rmw_qos_profile_default);
+    
+    auto relative_pose_sub = node->create_subscription<std_msgs::msg::Float32>("/apriltags/detections", ApriltagCallback, rmw_qos_profile_default);
+
+
+
+
+    //ros::Publisher  pub  = n.advertise<geometry_msgs::PoseStamped>("/mavros/setpoint_position/local",1);
+    //ros::Publisher  pub1 = n.advertise<nav_msgs::Odometry>("/global_platform_position",1);
+    //ros::Publisher  pub2 = n.advertise<geometry_msgs::TwistStamped>("/mavros/setpoint_velocity/cmd_vel",1);
+    auto pub = node->create_publisher<geometry_msgs::msg::PoseStamped>("/mavros/setpoint_position/local", rmw_qos_profile_default);
+    auto pub1 = node->create_publisher<nav_msgs::msg::Odometry>("/global_platform_position", rmw_qos_profile_default);
+    auto pub2 = node->create_publisher<geometry_msgs::msg::TwistStamped>("/mavros/setpoint_velocity/cmd_vel", rmw_qos_profile_default);
+
+    
+    
     //LCM stuff
     lcm::Subscription *sub2 = handler2.subscribe("local_position_sp", &CallbackHandler::positionSetpointCallback, &call);
-    lcm::Subscription *sub3 = handler3.subscribe("platRob"    , &CallbackHandler::visionEstimateCallback, &call);
+    lcm::Subscription *sub3 = handler3.subscribe("Landing_Site/pose"    , &CallbackHandler::visionEstimateCallback, &call);
     sub2->setQueueCapacity(1);
     sub3->setQueueCapacity(1);
 
@@ -93,16 +390,19 @@ int main(int argc, char **argv)
     fds[1].fd = handler3.getFileno(); // Platform position
     fds[1].events = POLLIN;
 
-    robot_state.landed = 1;
-    robot_state.armed  = 0;
+    //robot_state.landed = 1;
+    //robot_state.armed  = 0;
 
     //main loop
-    ros::Rate loop_rate(30);
+    //ros::Rate loop_rate(30);
+    rclcpp::Rate loop_rate(30);
+
+    
     int stateRate = 0;
     int*  platformDataRec = new int(0);
     int*  robotDataRec    = new int(0);
 
-    while (ros::ok()){
+    while (rclcpp::ok()){
 
         //Poll file descriptors
         int ret = poll(fds,2,0);
@@ -113,16 +413,17 @@ int main(int argc, char **argv)
         if(*platformDataRec){
 
             handler3.handle();
-            platPos.pose.pose.position.x = call._vision_pos.getX();
-            platPos.pose.pose.position.y = call._vision_pos.getY();
-            platPos.pose.pose.position.z = call._vision_pos.getZ();
+            platPos->pose.pose.position.x = call._vision_pos.getX();
+            platPos->pose.pose.position.y = call._vision_pos.getY();
+            platPos->pose.pose.position.z = call._vision_pos.getZ();
 
-            platPos.twist.twist.linear.x = call._vision_pos.getVx();
-            platPos.twist.twist.linear.y = call._vision_pos.getVy();
-            platPos.twist.twist.linear.z = call._vision_pos.getVz();
+            platPos->twist.twist.linear.x = call._vision_pos.getVx();
+            platPos->twist.twist.linear.y = call._vision_pos.getVy();
+            platPos->twist.twist.linear.z = call._vision_pos.getVz();
 
-            platPos.header.stamp = ros::Time::now();
-            pub1.publish(platPos);
+            //platPos->header.stamp = ros::Time::now();
+            platPos->header.stamp = rclcpp::Clock::now();
+            pub1->publish(platPos);
 
         }
 
@@ -130,34 +431,39 @@ int main(int argc, char **argv)
         if(*robotDataRec){
 
             if(call._position_sp.getType() == MavState::type::POSITION) {
-                geometry_msgs::PoseStamped commandPose;
+                //geometry_msgs::PoseStamped commandPose;
+                auto commandPose = std::make_shared<geometry_msgs::msg::PoseStamped>();
+                
                 handler2.handle();
 
-                commandPose.pose.position.x = call._position_sp.getX();
-                commandPose.pose.position.y = call._position_sp.getY();
-                commandPose.pose.position.z = call._position_sp.getZ();
+                commandPose->pose.position.x = call._position_sp.getX();
+                commandPose->pose.position.y = call._position_sp.getY();
+                commandPose->pose.position.z = call._position_sp.getZ();
 
-                commandPose.pose.orientation.x = call._position_sp.getOrientation().x();
-                commandPose.pose.orientation.y = call._position_sp.getOrientation().y();
-                commandPose.pose.orientation.z = call._position_sp.getOrientation().z();
-                commandPose.pose.orientation.w = call._position_sp.getOrientation().w();
+                commandPose->pose.orientation.x = call._position_sp.getOrientation().x();
+                commandPose->pose.orientation.y = call._position_sp.getOrientation().y();
+                commandPose->pose.orientation.z = call._position_sp.getOrientation().z();
+                commandPose->pose.orientation.w = call._position_sp.getOrientation().w();
 
-                std::cout << "command: " << commandPose.pose.position.x << " " << commandPose.pose.position.y << " " <<commandPose.pose.position.z << std::endl;
-                pub.publish(commandPose);
+                std::cout << "command: " << commandPose->pose.position.x << " " << commandPose->pose.position.y << " " <<commandPose->pose.position.z << std::endl;
+                pub->publish(commandPose);
             }
             else if(call._position_sp.getType() == MavState::type::VELOCITY) {
-                geometry_msgs::TwistStamped commandPose;
+                //geometry_msgs::TwistStamped commandPose;
+                auto commandPose = std::make_shared<geometry_msgs::msg::TwistStamped>();
+
                 handler2.handle();
 
-                commandPose.twist.linear.x =  call._position_sp.getVx();
-                commandPose.twist.linear.y =  call._position_sp.getVy();
-                commandPose.twist.linear.z =  call._position_sp.getVz();
+                commandPose->twist.linear.x =  call._position_sp.getVx();
+                commandPose->twist.linear.y =  call._position_sp.getVy();
+                commandPose->twist.linear.z =  call._position_sp.getVz();
 
-                std::cout << "commandV: " << commandPose.twist.linear.x << " " << commandPose.twist.linear.y << " " <<commandPose.twist.linear.z << std::endl;
-                pub2.publish(commandPose);
+                std::cout << "commandV: " << commandPose->twist.linear.x << " " << commandPose->twist.linear.y << " " <<commandPose->twist.linear.z << std::endl;
+                pub2->publish(commandPose);
             }
 
-            ROS_INFO_ONCE("publish ros command");
+            //ROS_INFO_ONCE("publish ros command");
+            RCLCPP_INFO_ONCE("publish ros command");
 
         }
 
@@ -168,8 +474,10 @@ int main(int argc, char **argv)
         }
 
 
-        ROS_INFO_ONCE("Spinning");
-        ros::spinOnce();
+        //ROS_INFO_ONCE("Spinning");
+        RCLCPP_INFO_ONCE("Spinning");
+        //ros::spinOnce();
+        rclcpp::spin_some(node);
         loop_rate.sleep();
 
     }
