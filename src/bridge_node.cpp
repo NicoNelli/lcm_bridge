@@ -10,11 +10,12 @@
 #include "lcm_messages/exec/state.hpp"
 #include "common/MavState.h"
 #include "common/CallbackHandler.hpp"
-#include "nav_msgs/msg/Odometry.hpp"
+#include "nav_msgs/msg/odometry.hpp"
 #include <poll.h>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
-#include "apriltags/AprilTagDetections.h"
+#include "apriltag_msgs/msg/april_tag_detection_array.hpp"
+#include "tf2_msgs/msg/tf_message.hpp"
 #include <cmath>
 #include <queue>
 
@@ -46,7 +47,7 @@ bool platform = false;
 
 
 
-geometry::vision vision_pose; //lcm message for vision topic.
+//geometry::vision vision_pose; //lcm message for vision topic.
 
 typedef std::queue<double> queue_t;
 queue_t Queue_roll;
@@ -63,6 +64,8 @@ bool firstState = true;
 bool firstEState = true;
 
 //void odometryCallback(nav_msgs::Odometry pose){ //the callback of pose of the UAV computed via the motion capture system.
+
+
 void odometryCallback(const nav_msgs::msg::Odometry::SharedPtr pose){
 
     lcm_pose.position[0] =  pose->pose.pose.position.x;
@@ -357,23 +360,28 @@ int main(int argc, char **argv)
     //ros::Subscriber state_extended_sub = n.subscribe("/mavros/extended_state",1,&EStateCallback);
     //ros::Subscriber relative_pose_sub = n.subscribe("/apriltags/detections",1,&ApriltagCallback);//apriltags system.
 
-    auto odometry_sub = node->create_subscription<std_msgs::msg::Float32>("/mavros/local_position/odom", odometryCallback, rmw_qos_profile_default);
+    auto odometry_sub = node->create_subscription<nav_msgs::msg::Odometry>("/mavros/local_position/odom", odometryCallback, rmw_qos_profile_default);
     
-    auto state_sub = node->create_subscription<std_msgs::msg::Float32>("/mavros/state", stateCallback, rmw_qos_profile_default);
+    //MUST BE ADDED
+    //auto state_sub = node->create_subscription<std_msgs::msg::Float32>("/mavros/state", stateCallback, rmw_qos_profile_default);
     
-    auto state_extended_sub = node->create_subscription<std_msgs::msg::Float32>("/mavros/extended_state", EStateCallback, rmw_qos_profile_default);
+    //MUST BE ADDED
+    //auto state_extended_sub = node->create_subscription<std_msgs::msg::Float32>("/mavros/extended_state", EStateCallback, rmw_qos_profile_default);
     
-    auto relative_pose_sub = node->create_subscription<std_msgs::msg::Float32>("/apriltags/detections", ApriltagCallback, rmw_qos_profile_default);
+    //MUST BE ADDED
+    //auto relative_pose_sub = node->create_subscription<std_msgs::msg::Float32>("/apriltags/detections", ApriltagCallback, rmw_qos_profile_default);
 
 
 
-
+    //ROS1
     //ros::Publisher  pub  = n.advertise<geometry_msgs::PoseStamped>("/mavros/setpoint_position/local",1);
     //ros::Publisher  pub1 = n.advertise<nav_msgs::Odometry>("/global_platform_position",1);
     //ros::Publisher  pub2 = n.advertise<geometry_msgs::TwistStamped>("/mavros/setpoint_velocity/cmd_vel",1);
-    auto pub = node->create_publisher<geometry_msgs::msg::PoseStamped>("/mavros/setpoint_position/local", rmw_qos_profile_default);
-    auto pub1 = node->create_publisher<nav_msgs::msg::Odometry>("/global_platform_position", rmw_qos_profile_default);
-    auto pub2 = node->create_publisher<geometry_msgs::msg::TwistStamped>("/mavros/setpoint_velocity/cmd_vel", rmw_qos_profile_default);
+    
+    //ROS2
+    //auto pub = node->create_publisher<geometry_msgs::msg::PoseStamped>("/mavros/setpoint_position/local", rmw_qos_profile_default);
+    //auto pub1 = node->create_publisher<nav_msgs::msg::Odometry>("/global_platform_position", rmw_qos_profile_default);
+    //auto pub2 = node->create_publisher<geometry_msgs::msg::TwistStamped>("/mavros/setpoint_velocity/cmd_vel", rmw_qos_profile_default);
 
     
     
@@ -422,8 +430,11 @@ int main(int argc, char **argv)
             platPos->twist.twist.linear.z = call._vision_pos.getVz();
 
             //platPos->header.stamp = ros::Time::now();
-            platPos->header.stamp = rclcpp::Clock::now();
-            pub1->publish(platPos);
+            //MUST BE ADDED
+	    //platPos->header.stamp = rclcpp::Clock::now();
+            
+	    
+	    //pub1->publish(platPos);
 
         }
 
@@ -446,7 +457,7 @@ int main(int argc, char **argv)
                 commandPose->pose.orientation.w = call._position_sp.getOrientation().w();
 
                 std::cout << "command: " << commandPose->pose.position.x << " " << commandPose->pose.position.y << " " <<commandPose->pose.position.z << std::endl;
-                pub->publish(commandPose);
+                //pub->publish(commandPose);
             }
             else if(call._position_sp.getType() == MavState::type::VELOCITY) {
                 //geometry_msgs::TwistStamped commandPose;
@@ -459,11 +470,11 @@ int main(int argc, char **argv)
                 commandPose->twist.linear.z =  call._position_sp.getVz();
 
                 std::cout << "commandV: " << commandPose->twist.linear.x << " " << commandPose->twist.linear.y << " " <<commandPose->twist.linear.z << std::endl;
-                pub2->publish(commandPose);
+                //pub2->publish(commandPose);
             }
 
             //ROS_INFO_ONCE("publish ros command");
-            RCLCPP_INFO_ONCE("publish ros command");
+            //RCLCPP_INFO_ONCE("publish ros command");
 
         }
 
@@ -475,7 +486,7 @@ int main(int argc, char **argv)
 
 
         //ROS_INFO_ONCE("Spinning");
-        RCLCPP_INFO_ONCE("Spinning");
+        //RCLCPP_INFO_ONCE("Spinning");
         //ros::spinOnce();
         rclcpp::spin_some(node);
         loop_rate.sleep();
