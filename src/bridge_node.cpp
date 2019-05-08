@@ -17,6 +17,7 @@
 #include "apriltags/AprilTagDetections.h"
 #include <cmath>
 #include <queue>
+#include <string>
 
 lcm::LCM handler, handler2, handler3, handler4;
 geometry::pose lcm_pose;
@@ -51,16 +52,7 @@ Eigen::Matrix4d drone_T_plat;
 bool firstState = true;
 bool firstEState = true;
 
-//To compute odometry using vision feedback
-mavros_msgs::ParamSet switchingEstimator;
-mavros_msgs::ParamValue efk2_value;
-bool vision = true;
-double xPrevious = 0;
-double yPrevious = 0;
-double zPrevious = 0;
-geometry_msgs::PoseStamped visionOdometry; //odometry performed using vision feedback
-ros::Publisher  pub_vision_odom;
-ros::ServiceClient set_mode_estimatorClient;
+std::string mode;
 
 void odometryCallback(nav_msgs::Odometry pose){
 
@@ -76,6 +68,14 @@ void odometryCallback(nav_msgs::Odometry pose){
     lcm_pose.orientation[1] = pose.pose.pose.orientation.x;
     lcm_pose.orientation[2] = pose.pose.pose.orientation.y;
     lcm_pose.orientation[3] = pose.pose.pose.orientation.z;
+
+
+    if( !mode.compare("OFFBOARD") )
+		lcm_pose.isValid = 1;
+	else
+		lcm_pose.isValid = 0;
+
+	std::cout<<"valid: "<<(unsigned)lcm_pose.isValid<<std::endl;
 
     //Here i have to build the transformation matrix between the drone and absolute reference frame
     /*
@@ -95,8 +95,6 @@ void odometryCallback(nav_msgs::Odometry pose){
     zero_T_drone = zero_T_drone.inverse().eval();
     drone = true;
 */
-
-
 
     handler.publish("vision_position_estimate",&lcm_pose);
 
@@ -152,6 +150,8 @@ void stateCallback(mavros_msgs::State s){
         disarmed.armed = s.armed;
         firstState = false;
     }
+
+    mode = s.mode;
 
     //Store arming state
     if(disarmed.armed == s.armed) robot_state.armed = 0;
@@ -237,77 +237,12 @@ void ApriltagCallback(apriltags::AprilTagDetections A_det){
                 vision_pose.yaw = movingFilter(yaw, &Queue_yaw, &integral_yaw);
 
 
-                //vision odometry
-                visionOdometry.pose.position.x = lcm_pose.position[0] + (vision_pose.position[0] - xPrevious);
-                visionOdometry.pose.position.y = lcm_pose.position[1] + (vision_pose.position[1] - yPrevious);
-                visionOdometry.pose.position.z = lcm_pose.position[2] + (vision_pose.position[2] - zPrevious);
-
-				xPrevious = vision_pose.position[0];
-                yPrevious = vision_pose.position[1];
-                zPrevious = vision_pose.position[2];
-
-                
-                if(vision){
-                	efk2_value.real = 0;
-                	efk2_value.integer = 9;
-                	switchingEstimator.request.value = efk2_value;
-                	switchingEstimator.request.param_id = "EKF2_AID_MASK";
-                	set_mode_estimatorClient.call(switchingEstimator);
-
-                	vision = false;
-                }
-
-
-               pub_vision_odom.publish(visionOdometry);
                handler4.publish("apriltag_vision_system",&vision_pose);
                //lcm publication.
 
 	}
-	else{
- 		if(!vision){
-    		efk2_value.real = 0;
-            efk2_value.integer = 1;
-            switchingEstimator.request.value = efk2_value;
-            switchingEstimator.request.param_id = "EKF2_AID_MASK";
-            set_mode_estimatorClient.call(switchingEstimator);
-			vision = true;
-        }
-    }
 	
 }
-
-/*
-void PlatformCallback(geometry_msgs::PoseStamped msg){
-
-    //Here i have to build the transformation matrix between the drone and absolute reference frame
-    
-    Eigen::Quaterniond q3;
-    q3.x() = msg.pose.orientation.x;
-    q3.y() = msg.pose.orientation.y;
-    q3.z() = msg.pose.orientation.z;
-    q3.w() = msg.pose.orientation.w;
-
-    Eigen:: Matrix3d R3 = q3.normalized().toRotationMatrix();
-
-    zero_T_plat << R3(0,0), R3(0,1), R3(0,2), msg.pose.position.x,
-                   R3(1,0), R3(1,1), R3(1,2), msg.pose.position.y, 
-                   R3(2,0), R3(2,1), R3(2,2), msg.pose.position.z,
-                          0,       0,       0,                    1;
-
-    bool platform = true;
-
-    if(drone && platform){
-
-        drone_T_plat = zero_T_drone * zero_T_plat;
-
-        Eigen::RowVectorXd error(3);
-        error << drone_T_plat(0,3), drone_T_plat(1,3),drone_T_plat(2,3);
-        std::cout << "error: " << error << std::endl; 
-
-    }
-
-}
-*/
 
 int main(int argc, char **argv)
 {
@@ -320,11 +255,6 @@ int main(int argc, char **argv)
     ros::Subscriber state_sub = n.subscribe("/mavros/state",1,&stateCallback);
     ros::Subscriber state_extended_sub = n.subscribe("/mavros/extended_state",1,&EStateCallback);
     ros::Subscriber relative_pose_sub = n.subscribe("/apriltags/detections",1,&ApriltagCallback);//apriltags system.
-
-
-    //publish vision odometry
-    pub_vision_odom = n.advertise<geometry_msgs::PoseStamped>("/mavros/vision_pose/pose",1);
-    set_mode_estimatorClient = n.serviceClient<mavros_msgs::ParamSet>("/mavros/param/set");
 
 
     ros::Publisher  pub  = n.advertise<geometry_msgs::PoseStamped>("/mavros/setpoint_position/local",1);
@@ -434,3 +364,37 @@ int main(int argc, char **argv)
     return 0;
 
 }
+
+
+/*
+void PlatformCallback(geometry_msgs::PoseStamped msg){
+
+    //Here i have to build the transformation matrix between the drone and absolute reference frame
+    
+    Eigen::Quaterniond q3;
+    q3.x() = msg.pose.orientation.x;
+    q3.y() = msg.pose.orientation.y;
+    q3.z() = msg.pose.orientation.z;
+    q3.w() = msg.pose.orientation.w;
+
+    Eigen:: Matrix3d R3 = q3.normalized().toRotationMatrix();
+
+    zero_T_plat << R3(0,0), R3(0,1), R3(0,2), msg.pose.position.x,
+                   R3(1,0), R3(1,1), R3(1,2), msg.pose.position.y, 
+                   R3(2,0), R3(2,1), R3(2,2), msg.pose.position.z,
+                          0,       0,       0,                    1;
+
+    bool platform = true;
+
+    if(drone && platform){
+
+        drone_T_plat = zero_T_drone * zero_T_plat;
+
+        Eigen::RowVectorXd error(3);
+        error << drone_T_plat(0,3), drone_T_plat(1,3),drone_T_plat(2,3);
+        std::cout << "error: " << error << std::endl; 
+
+    }
+
+}
+*/
